@@ -1,0 +1,1601 @@
+---
+title: 'BP40087: Tumour IHC Analyses update MODIFIED plots'
+author: "Eveline Nüesch- Mariana Bustamante"
+date: "Data Snapshot: vad latest data 13.06.22"
+output:
+  html_document:
+    theme: flatly
+    code_folding : hide
+    number_sections: false
+    toc: true
+    toc_float: true
+    fig_width: 8
+    fig_height: 6
+    dpi: 300
+    # fig_height: 9
+    # toc_depth: 2
+    # toc_float: 
+    #   collapsed: false
+    #   smooth_scroll: false
+    #theme: spacelab
+editor_options: 
+  chunk_output_type: console
+# params:
+#   palette:
+#     label: "Select color palette:"
+#     value: dosecols_viridis
+#     input: select
+#     choices: [dosecols_viridis, dosecols, dosecols_quali]
+  
+---
+
+
+```{r, include=FALSE}
+##Empty the working memory
+rm(list = ls())
+#knitr::opts_chunk$set(echo=TRUE)
+library(knitr)
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+library(rice)
+library(LaplacesDemon)
+library(ggalluvial)
+library(ggpubr)
+library(survival)
+library(survminer)
+
+
+
+
+snapshot.date <- "13 June 2022"
+
+set.seed(42)
+
+dosecols <- c( "45" = "#ffffd9",
+                   "90" = "#edf8b1",
+                  "130" = "#c7e9b4",
+                  "260" = "#7fcdbb",
+                  "500" = "#41b6c4",
+                  "670" = "#1d91c0",
+                 "1000" = "#225ea8",
+                 "2000" = "#0c2c84")
+
+dosecols_quali <- c( "45" = "#ffff33",
+                   "90" = "#a65628",
+                  "130" = "#984ea3",
+                  "260" = "#4daf4a",
+                  "500" = "#377eb8",
+                  "670" = "#f781bf",
+                 "1000" = "#ff7f00",
+                 "2000" = "#e41a1c")
+
+palette_group <- c("RO7122290 single agent"= "#009E73", 
+                   "RO7122290 + atezolizumab" = "#D55E00")
+
+group_shape <- c("RO7122290 single agent"= 23, 
+                   "RO7122290 + atezolizumab" = 21)
+
+
+respcolours <-   c("CR" = "#009E73",
+                    "PR"= "#0072B2", 
+                           "SD" = "#F0E442", 
+                           "PD" = "#D55E00"#, 
+                    # "Missing" = "grey",
+                    # "CR (Complete response)" = "#009E73", 
+                    # "PR (Partial response)"= "#0072B2", 
+                    # "PD (Progressive disease)"= "#D55E00",
+                    # "SD (Stable disease)" = "#F0E442"
+                   )
+
+dosecols_viridis <- c(
+  "45", "90", "130", "260", "500", "670", "1000", "2000"
+) %>%
+  set_names(viridis::viridis(length(.), direction = -1), .)
+
+
+order_bor <- c("CR",
+               "PR",
+               "SD", 
+               "PD", 
+              #"NA", 
+              "Missing")
+
+              imm_pty_mapping <- c("EXCLUDED - INTRA-TUMORAL" = "Excluded", 
+                   "DESERT" = "Desert",
+                   "INFLAMED" = "Inflamed")
+
+visit_mapping <- c("801_BASELINE" = "Baseline", 
+                   "801_" = "Baseline",
+                   "802_ON TREATMENT" = "On-treatment", 
+                   "802_ON_TREATMENT" = "On-treatment", 
+                   "800_ARCHIVAL_TISSUE" = "Archival",
+                   "800_BASELINE" = "Archival",
+                   "Tissue Sample Collection-Screening" = "Screening", 
+                   "Tissue Coll. On-Treatment" = "On-treatment",
+                   "801" = "Baseline", 
+                   "802" = "On-treatment", 
+                   "800" = "Archival"
+                   )
+
+                   
+cols_allu <- c("CR" = "#009E73",
+                           "SD" = "#F0E442", 
+                           "PR"= "#0072B2", 
+                           "PD" = "#D55E00", 
+              "Missing" = "#d9d9d9",
+              "Desert" = "#8dd3c7", 
+              "Inflamed" = "#bebada",
+              "Excluded" = "#ffffb3",
+              "Fail" = "#F0E442", 
+              "RO7122290 single agent" = "#e78ac3", 
+              "RO7122290 + atezolizumab" = "#ffd92f" 
+            )
+
+
+
+# Reading external data
+source("R/read_data_internal_mb.R")
+
+```
+
+```{r functions, echo=FALSE}
+
+
+plot_ABS <- function(dat, title, y_label = "Density (cells/mm2)", palette = dosecols_viridis) {
+
+    
+    gg <- 
+      ggplot(dat[dat$VISITNUM<=2,], aes(x=VISIT, y=AVAL)) +
+      geom_boxplot(aes(group=VISIT), colour="gray14", fill="#f0f0f0", outlier.shape=NA, size=0.4) +
+      geom_line(aes(x = VISIT,  group=USUBJID), alpha=0.25, size=0.5, position = position_dodge(0.3)) +
+      geom_point(aes(x=VISIT, fill = as.factor(EXDOSE),  group=USUBJID), size=2.5, alpha=0.75, shape=21, col = "black", position = position_dodge(0.3))+
+      
+      scale_y_log10() +
+      xlab(" ") +
+      ylab(y_label) +
+      scale_fill_manual(name="RO7122290 dose (mg)", values = palette) +
+      labs(title = title)  + 
+      facet_grid(col = vars(GROUP)) +
+      theme_bw()
+    
+    print(gg)
+    
+}
+  
+plot_CHB <- function(dat, title, 
+                     y_label = "Fold change from baseline",
+                     palette = dosecols_viridis){
+
+    
+    dat1 <- dat %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE)
+  
+    gg <- 
+      ggplot(dat1, aes(x=GROUP, y=RCHG)) +
+      geom_boxplot(aes(group=GROUP), colour="darkgray", fill="#f0f0f0", outlier.shape=NA, size=0.4) +
+      geom_point(aes(x=GROUP, fill = as.factor(EXDOSE)), size=2.5, col = "black", alpha=0.75, shape=21, position = position_dodge(0.3)) +
+      scale_y_log10() +
+      xlab(" ") +
+      ylab(y_label) +
+      scale_fill_manual(name="RO7122290 dose (mg)", values = palette) +
+      geom_hline(aes(yintercept = 2), linetype="dotted" , color = "black") +
+      ggtitle(title) +
+      theme_bw() 
+
+    
+    print(gg)
+} 
+
+
+table_ZB <- function(dat, title){
+  
+    dat.table = dat %>% filter(VISIT=='On Treatment') %>%
+                mutate(EXDOSE = paste(as.character(EXDOSE), EXDOSU)) %>%
+                mutate(BASE = paste(as.character(round(BASE)), PARAMU)) %>%
+                mutate(AVAL =  paste(as.character(round(AVAL)), PARAMU)) %>%
+                mutate(RCHG = round(RCHG, digits=2)) %>%
+                select(USUBJID, MHTERM, EXDOSE, AVALC, BASE, AVAL, RCHG) 
+    
+    tt <- kable(dat.table,
+          col.names = c("Subject",
+                        "Tumour type",
+                        "RO7122290 dose (mg)",
+                        "Best Overall Response",
+                        "Screening Value",
+                        "On-Treatment Value",
+                        "Fold induction"),
+          caption = title)
+    print(tt)
+}
+```
+
+```{r echo=FALSE, warning=FALSE}
+# CD8+ T cells infiltration (IRIS-IHC)
+CD8T <- derive_ZB(sdtm$zb, '(MKI67+ CD8A+)+(MKI67- CD8A+)', 'DNPCTAR')
+CD8T <- derive_pchgdata(CD8T)
+# CD8+ T cells proliferation (IRIS-IHC)
+KI67CD8T <- derive_ZB(sdtm$zb, 'MKI67+ CD8A+', 'DNPCTAR')
+KI67CD8T <- derive_pchgdata(KI67CD8T)
+
+FAP_pos <- derive_ZB(sdtm$zb, "FAP+", "STPOSARP") # this is in percentage
+FAP_pos <- derive_pchgdata(FAP_pos)
+
+
+FAP_ker_neg <- derive_ZB(sdtm$zb, "FAP+/KRT-", "STPOSARP") # this is in percentage
+FAP_ker_neg <- derive_pchgdata(FAP_ker_neg) %>% 
+                mutate(original_indication = str_replace(MHTERM, 
+                                                      "LOCAL |METASTATIC ", 
+                                            ""
+                                              ), 
+                   indication = case_when(original_indication == "NON SMALL CELL LUNG CANCER" ~
+                                            "NSCLC", 
+                                          original_indication == "SMALL CELL LUNG CANCER" ~
+                                            "SCLC", 
+                                          original_indication %in% c("RECTAL CANCER", 
+                                                                     "COLON CANCER") ~
+                                            "CRC", 
+                                          original_indication %in% c("TONGUE CANCER", 
+                                                                     "SALIVARY GLAND CANCER") ~
+                                            "HNC", 
+                                          original_indication == "THYMOMA AND THYMIC CARCINOMA" ~
+                                            "THYM", 
+                                          original_indication == "BREAST CANCER" ~
+                                            "TNBC", # they are all TN
+                                          str_detect(original_indication, 
+                                                     "MELANOMA") ~
+                                            "MELANOMA",
+                                          str_detect(original_indication, 
+                                                     "MESOTHELIOMA|PLEURAL") ~
+                                            "MESOTHELIOMA",
+                                          original_indication == "GASTRIC CANCER" ~
+                                            "GC", 
+                                          original_indication == "RENAL CELL CANCER" ~
+                                            "RCC", 
+                                          original_indication == "TESTICULAR CANCER" ~
+                                            "TESTICULAR", 
+                                          original_indication == "MALIGNANT FIBROUS HISTIOCYTOMA OF BONE" ~
+                                            "MFHB", 
+                                          original_indication == "FIBROLAMELAR HEPATOCARCINOMA" ~
+                                            "HCC", 
+                                          original_indication == "PANCREATIC CANCER" ~
+                                            "PANCREATIC CA", 
+                                          original_indication == "BLADDER CANCER" ~
+                                            "BLADDER CA", 
+                                          original_indication == "URETER CANCER" ~
+                                            "URETER CA",
+                                          original_indication == "PAPILLARY LUNG ADENOCARCINOMA" ~
+                                            "LUNG ADENOCA",
+                                          original_indication == "MERKEL CELL CARCINOMA" ~
+                                            "MCC",
+                                          original_indication %in% c("NEUROENDOCRINE TUMORS", 
+                                                                     "GASTROINTESTINAL CARCINOID TUMOR") ~
+                                            "NET", 
+                                          TRUE ~ original_indication
+                     
+                   ))
+
+PDL1_total_perc_immune_cells_stain <- derive_ZB(sdtm$zb, "CD274", "ICSTOT") %>% derive_pchgdata() %>% 
+                                      mutate(VISIT = factor(VISIT, levels= c("Baseline", "On Treatment"), labels= c("Archival", "On Treatment"))) 
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass <- derive_ZB(sdtm$zb, "CD274", "TINFLICP") %>% derive_pchgdata() %>% 
+                                      mutate(VISIT = factor(VISIT, levels= c("Baseline", "On Treatment"), labels= c("Archival", "On Treatment"))) 
+
+
+PDL1_total_perc_ihc_pos_tum_cells <- derive_ZB(sdtm$zb, "CD274", "POSTUCP") %>% derive_pchgdata() %>% 
+                                      mutate(VISIT = factor(VISIT, levels= c("Baseline", "On Treatment"), labels= c("Archival", "On Treatment"))) 
+```
+
+## CD8+ Absolute values
+
+IRIS-IHC
+
+
+```{r, echo=FALSE}
+
+gg1 <- plot_ABS(CD8T, "", y_label = "CD8+ Density\n (cells/mm2)")
+#fig6bleft
+
+ # ggsave(filename = "Fig6B_left.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+
+gg1 + ggsignif::geom_signif(comparisons = list(c("Baseline", "On Treatment")), map_signif_level = TRUE)
+
+    
+
+```
+
+## CD8+ Single Agent: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(CD8T[CD8T$GROUP=='RO7122290 single agent',], "CD8+: Single Agent")
+```
+
+## CD8+ COMBO: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(CD8T[CD8T$GROUP=='RO7122290 + atezolizumab',], "CD8+: Combination")
+```
+
+## CD8+: Changes from baseline
+```{r echo=FALSE, warning=FALSE}
+
+gg2 <- plot_CHB(CD8T, "", y_label = "CD8+ \nFold change from baseline")
+
+
+ # ggsave(filename = "Fig6B_right.pdf", path = "data/stm_2022_figures",
+ #        width = 16, height = 12, unit= "cm", dpi = 300)
+
+```
+
+## Ki67+ CD8+ Absolute Values
+
+```{r, echo=FALSE}
+
+
+gg3 <- plot_ABS(KI67CD8T, "", y_label = "CD8+ Ki67+ Density\n (cells/mm2)")
+
+
+ # ggsave(filename = "Fig6C_left.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+ 
+
+```
+
+## Ki67+ CD8+s: Single Agent patients with OT biopsies
+```{r echo=FALSE, warning=FALSE}
+table_ZB(KI67CD8T[KI67CD8T$GROUP=='RO7122290 single agent',], "Ki67+CD8+: Single Agent")
+```
+
+## Ki67+ CD8+: COMBO patients with OT biopsies
+```{r echo=FALSE, warning=FALSE}
+table_ZB(KI67CD8T[KI67CD8T$GROUP=='RO7122290 + atezolizumab',], "Ki67+CD8+: Combination")
+```
+
+## Ki67+ CD8+: Changes from baseline
+```{r echo=FALSE, warning=FALSE}
+gg4 <- plot_CHB(KI67CD8T,  "", y_label = "CD8+ Ki67+ \nFold change from baseline")
+
+
+ # ggsave(filename = "Fig6C_right.pdf", path = "data/stm_2022_figures",
+ #        width = 16, height = 12, unit= "cm", dpi = 300)
+ 
+
+```
+
+
+
+
+## FAP+ Absolute values
+```{r, echo=FALSE}
+
+gg5 <- plot_ABS(FAP_pos, "", "FAP+ \n(% Staining tumor area)")
+
+#FigS6A
+
+# ggsave(filename = "FigS6A.pdf", path = "data/stm_2022_figures",
+#        width = 20, height = 12, unit= "cm", dpi = 300)
+
+gg5 + ggsignif::geom_signif(comparisons = list(c("Baseline", "On Treatment")), map_signif_level = TRUE)
+
+
+```
+
+## FAP+ Single Agent: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(FAP_pos[FAP_pos$GROUP=='RO7122290 single agent',], "FAP+: Single Agent")
+```
+
+## CD8+ COMBO: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(FAP_pos[FAP_pos$GROUP=='RO7122290 + atezolizumab',], "FAP+: Combination")
+```
+
+## FAP+: Changes from baseline
+```{r echo=FALSE, warning=FALSE}
+gg6 <- plot_CHB(FAP_pos, "FAP+ Fold change", y_label = "FAP+ \nFold change from baseline")
+
+```
+
+## FAP+/panCK- Absolute values
+```{r, echo=FALSE}
+
+gg7 <- plot_ABS(FAP_ker_neg, "", "FAP+/panCK- \n(% Staining tumor area)")
+
+# FigS6B
+
+# ggsave(filename = "FigS6B.pdf", path = "data/stm_2022_figures",
+#        width = 20, height = 12, unit= "cm", dpi = 300)
+
+
+gg7 + ggsignif::geom_signif(comparisons = list(c("Baseline", "On Treatment")), map_signif_level = TRUE)
+
+
+```
+
+## FAP+/panCK- Single Agent: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(FAP_ker_neg[FAP_ker_neg$GROUP=='RO7122290 single agent',], "FAP+: Single Agent")
+```
+
+## CD8+/panCK- COMBO: Patients with OT biopsies
+```{r, echo=FALSE}
+table_ZB(FAP_ker_neg[FAP_ker_neg$GROUP=='RO7122290 + atezolizumab',], "FAP+: Combination")
+```
+
+## FAP+/panCK-: Changes from baseline
+```{r echo=FALSE, warning=FALSE}
+gg8 <- plot_CHB(FAP_ker_neg, "FAP+/panCk- Fold change", y_label = "FAP+/panCk- \nFold change from baseline")
+ 
+
+```
+
+
+
+## Risk ratio of increase in proliferating vs infiltrating CD8+ T cells
+
+In 12 (63%) paired biopsies the densities of proliferating CD8+ T cells increased more than the densities of all infiltrating CD8 T cells. On average, the increase was 1.8-fold higher for proliferating CD8+ T cells than for all infiltrating CD8+ T cells (P=0.01, signed-rank test).
+
+```{r echo=FALSE, warning=FALSE}
+anl <- KI67CD8T %>% mutate(BASE.1 = BASE, OT.1 = AVAL) %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE) %>%
+          select(USUBJID, ARMCD, EXDOSE, EXDOSU, AVALC, MHTERM, BASE.1, OT.1) %>%
+        left_join(CD8T %>% mutate(BASE.2 = BASE, OT.2 = AVAL) %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE) %>%
+          select(USUBJID, BASE.2, OT.2), 
+          by = "USUBJID") %>%
+        mutate(RR = (OT.1/BASE.1)/(OT.2/BASE.2))
+summary(anl$RR)
+table(anl$RR>1)
+wilcox.test(anl$RR, mu = 1, alternative = "two.sided")
+```
+
+for fap
+
+```{r echo=FALSE, warning=FALSE}
+fapcks <- FAP_ker_neg %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE)
+t.test(fapcks$BASE, fapcks$AVAL)
+
+faps <- FAP_pos %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE)
+t.test(faps$BASE, faps$AVAL)
+tot_cd8_test <- CD8T %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE)
+t.test(tot_cd8_test$BASE, tot_cd8_test$AVAL)
+prl_cd8_test <- KI67CD8T %>% filter(VISIT=='On Treatment' & is.na(RCHG)==FALSE)
+t.test(prl_cd8_test$BASE, prl_cd8_test$AVAL)
+```
+# Additional analysis
+
+
+
+
+
+```{r plots, echo=FALSE}
+#### Waterfall plot 
+g_waterf_bestcha_pts <- function(anl, title){
+  ##cut the USUBID down to last pt number
+  anl$USUBJIDcut <- do.call(rbind, str_split(anl$USUBJID, "-"))[,length(str_split(anl$USUBJID, "-")[[1]])]
+  ## keep only baseline per patient and use minPCHG
+  anl <- anl %>% filter(ABLFL=='Y')
+  
+  
+  groupcols <- c("Yes"= "royalblue", 
+                 "No"= "red")
+  
+  N.CPI = c(as.character(dim(anl %>% filter(CPIFL=='Yes'))[1]),
+            as.character(dim(anl %>% filter(CPIFL=='No' ))[1]))
+  
+  
+  ##plot
+  wat <- ggplot(data= anl, mapping = aes(x = reorder(USUBJIDcut, -minPCHG), y = minPCHG, fill=reorder(CPIFL, -minPCHG))) + 
+    geom_bar(stat = "identity", position = "stack") +
+    geom_hline(aes(yintercept = 20), linetype="dotted" , color = "black") +
+    geom_hline(aes(yintercept = 0), linetype="dashed" , color = "black") +
+    geom_hline(aes(yintercept = -30), linetype="dotted" , color = "black") +
+    scale_fill_manual(name="CPI experience", values = groupcols) +
+    scale_y_continuous(breaks=seq(-100, 100, 20), limits=c(-100,100)) +
+    scale_x_discrete(labels = NULL) +
+    xlab("") +
+    ylab("Best change in target lesions from baseline (%)")  +
+    ggtitle(title)  + 
+    theme_classic() + 
+    theme(axis.line.x=element_blank(),
+          axis.text.x=element_blank(), 
+          axis.ticks.x=element_blank()
+  
+          )
+  return(wat)
+}
+#### Waterfall plot by best overall response
+g_waterf_bestcha_pts_BOR <- function(anl, title){
+  ##cut the USUBID down to last pt number
+  anl$USUBJIDcut <- do.call(rbind, str_split(anl$USUBJID, "-"))[,length(str_split(anl$USUBJID, "-")[[1]])]
+  ## keep only baseline per patient and use minPCHG
+  anl <- anl %>% filter(ABLFL=='Y') %>% 
+      mutate(BOR = fct_rev(fct_relevel(.f = BOR, levels = order_bor)))  
+  
+  
+
+                
+  N.BOR = c(as.character(dim(anl %>% filter(BOR=='CR'))[1]),
+            as.character(dim(anl %>% filter(BOR=='PR' ))[1]),
+            as.character(dim(anl %>% filter(BOR=='SD' ))[1]),
+            as.character(dim(anl %>% filter(BOR=='PD' ))[1]),
+            as.character(dim(anl %>% filter(BOR=='Missing' ))[1]))
+   
+   
+ ##plot
+ wat <- ggplot(data= anl, mapping = aes(x = reorder(USUBJIDcut, -minPCHG), y = minPCHG, fill=reorder(BOR, -minPCHG))) + 
+    geom_bar(stat = "identity", position = "stack") +
+    geom_hline(aes(yintercept = 20), linetype="dotted" , color = "black") +
+    geom_hline(aes(yintercept = 0), linetype="dashed" , color = "black") +
+    geom_hline(aes(yintercept = -30), linetype="dotted" , color = "black") +
+    scale_fill_manual(name="Response by RECIST 1.1", values = respcolours, breaks = order_bor) +
+    scale_y_continuous(breaks=seq(-100, 100, 20), limits=c(-100,100)) +
+    scale_x_discrete(labels = NULL) +
+    xlab("") +
+    ylab("Best change in target lesions from baseline (%)")  +
+    labs(caption = paste(N.BOR[1], "CR, ", 
+                         N.BOR[2], "PR, ", 
+                         N.BOR[3], "SD, ", 
+                         N.BOR[4], "PD, and ", 
+                         N.BOR[5], "patients with missing response included", "\n", 
+                         "Data from", snapshot.date)) +
+    ggtitle(title)  + 
+    theme_classic() + 
+    theme(axis.line.x=element_blank(),
+          axis.text.x=element_blank(), 
+          axis.ticks.x=element_blank()
+  
+          )
+ 
+  return(wat)
+}
+
+
+
+
+
+
+
+plot_CHB_FC_ADY <- function(dat, title, palette = dosecols_viridis, names_facets = LBTEST, scales = "fixed", 
+                            dodge_width = 0, alpha_points = 0.8){
+ 
+  toplot <- dat %>% filter(ADY>=0 & ADY<=43)  %>%
+              mutate(GROUP2 = factor(case_when(GROUP=="RO7122290 single agent" ~"1",
+                                               GROUP=="RO7122290 + atezolizumab" & EXDOSE<500   ~"2",
+                                               GROUP=="RO7122290 + atezolizumab" & EXDOSE>=500  ~"3"), 
+                                     levels = c("1", "2", "3"),
+                                     labels = c("RO7122290 single agent", 
+                                                "RO7122290 + atezolizumab \n(45-260 mg)",
+                                                "RO7122290 + atezolizumab \n(500-2000 mg)")))
+  
+  gg <- ggplot(toplot, aes(x=as.numeric(ADY), y=RCHG, group=USUBJID, colour=as.factor(EXDOSE))) +
+        geom_boxplot(aes(x=as.numeric(ADY.1), group=ADY.1), colour="gray14", fill="gray85", outlier.shape=NA, size=0.4, alpha=0.5, width = 4) +
+          geom_point(aes(fill=as.factor(EXDOSE)), size=1.5, alpha= alpha_points,  colour="gray14", position = position_dodge(width = dodge_width), shape = 21) +
+          geom_line(size=0.5, alpha=0.5, position = position_dodge(width = dodge_width)) +          
+          theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+          geom_hline(aes(yintercept = 1), linetype="dashed" , color = "black") +
+          geom_hline(aes(yintercept = 10), linetype="dotted" , color = "black") +
+          geom_hline(aes(yintercept = 0.1), linetype="dotted" , color = "black") +
+          scale_x_continuous(labels = c(1,8, 15, 22, 29, 36, 43), breaks = c(1,8, 15, 22, 29, 36, 43)) +
+          scale_y_log10() +
+          xlab("Days after first dose") +
+          ylab("Fold change from baseline") +
+          scale_colour_manual(name="RO7122290 dose (mg)", values = palette) +
+          scale_fill_manual(name="RO7122290 dose (mg)", values = palette) +
+          ggtitle(title) +
+          theme_bw() +
+          facet_grid(rows = vars({{names_facets}}), cols = vars(GROUP2), scales = scales) 
+    print(gg)
+  
+}
+
+
+
+boxplots_clin_paper <- function(input_data, 
+                                     y_variable = AVAL,
+                                     shape = GROUP,
+                                     fill = AVALC, 
+                                     alpha_fill = 0.8, 
+                                     color_legend_title_string = "",
+                                     shape_legend_title_string = "",
+                                     y_axis_title_string = "", 
+                                     palette_fill = respcolours, 	
+                                     facet_variable_cols_as_string = NULL,
+                                     facet_variable_rows_as_string = NULL 
+                                     
+) {
+  
+  
+  
+  data_of_interest <- input_data %>% 
+                          filter(AVALC != "")
+
+  
+  respcolours <- respcolours[names(respcolours) %in% unique(input_data$AVALC)]
+  
+  
+  group_shape <- group_shape[names(group_shape) %in% unique(input_data$GROUP)]
+
+  p <- ggplot(data_of_interest, 
+              aes(
+                  x = fct_relevel(AVALC, rev(order_bor)),
+                  y = {{y_variable}}
+              )) +
+    geom_boxplot(outlier.shape = NA, 
+                 alpha = alpha_fill, 
+                 aes(fill = {{fill}})
+    ) +
+    geom_jitter(height = 0, 
+                width = 0.2,
+                size = 3,
+                alpha = 0.8,
+                color = "black",
+                fill = "#525252",
+                aes(shape = {{shape}} 
+                    )) +
+    labs(
+      x = "BOR", 
+      y = paste(y_axis_title_string)
+      
+    ) +
+    scale_fill_manual(values = palette_fill, name = "") +
+    scale_shape_manual(values = group_shape, name = "") +
+
+  
+  
+  if (is.null(facet_variable_cols_as_string)==FALSE) {
+    
+    
+    p <- p + facet_wrap(c(facet_variable_cols_as_string, 
+                          facet_variable_rows_as_string))
+    
+    
+  }
+  
+  
+  p + theme_bw()
+  
+}
+
+
+dotplots_clin_paper <- function(input_data, 
+                                     y_variable = AVAL,
+                                     shape = GROUP,
+                                     fill = AVALC, 
+                                     alpha_fill = 0.8, 
+                                     color_legend_title_string = "",
+                                     shape_legend_title_string = "",
+                                     y_axis_title_string = "", 
+                                     palette_fill = respcolours, 	
+                                     facet_variable_cols_as_string = NULL,
+                                     facet_variable_rows_as_string = NULL 
+                                     
+) {
+  
+  
+  
+  data_of_interest <- input_data %>% 
+                          filter(AVALC != "")
+  
+
+  
+  respcolours <- respcolours[names(respcolours) %in% unique(input_data$AVALC)]
+  
+  
+  group_shape <- group_shape[names(group_shape) %in% unique(input_data$GROUP)]
+  
+  data_of_interest$USUBJIDcut <- do.call(rbind, str_split(data_of_interest$USUBJID, "-"))[,length(str_split(data_of_interest$USUBJID, "-")[[1]])]
+
+  p <- ggplot(data_of_interest, 
+              aes(
+                  x = reorder(USUBJIDcut, -{{y_variable}}),
+                  y = {{y_variable}},
+                  shape = {{shape}}, 
+                    fill = {{fill}}
+              )) +
+
+    geom_point(
+                size = 3,
+                alpha = 0.8,
+                color = "black"
+                ) +
+    labs(
+      x = "", 
+      y = paste(y_axis_title_string)
+      
+    ) +
+    scale_fill_manual(values = respcolours, name = "") +
+    scale_shape_manual(values = group_shape, name = "") +
+    guides(fill = guide_legend(override.aes = list(shape = 21)))
+
+  
+  
+  if (is.null(facet_variable_cols_as_string)==FALSE) {
+    
+    
+    p <- p + facet_wrap(c(facet_variable_cols_as_string, 
+                          facet_variable_rows_as_string), 
+                        scales = "free_x")
+    
+    
+  }
+  
+  
+  p + theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5))
+  
+}
+
+
+
+
+```
+
+
+
+## BP40087 Part A: Waterfall plot by CPI experience
+
+
+
+```{r , echo = TRUE}
+g_waterf_bestcha_pts(anl = SLD[SLD$GROUP=='RO7122290 single agent',], 
+                     title = "RO7122290 single agent") +
+    annotate("text", x = 53, y = -44, label = c("*")) 
+
+
+# 
+ # ggsave(filename = "Fig1A.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 14, unit= "cm", dpi = 300)
+```
+
+```{r , echo = TRUE}
+g_waterf_bestcha_pts_BOR(anl = SLD[SLD$GROUP=='RO7122290 single agent',], 
+                         title = "RO7122290 single agent") +
+    annotate("text", x = 53, y = -44, label = c("*")) 
+```
+
+
+## BP40087 Part B/IMG: Waterfall plot by CPI experience
+
+```{r , echo = TRUE}
+g_waterf_bestcha_pts(anl = SLD[SLD$GROUP=='RO7122290 + atezolizumab',], 
+                     title = "RO7122290 + atezolizumab")  +
+    annotate("text", x = c(37,39), y = c(-43,-46), label = c("*", "*")) 
+
+ # ggsave(filename = "Fig1B.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 14, unit= "cm", dpi = 300)
+```
+
+
+
+
+```{r , echo = TRUE}
+
+
+g_waterf_bestcha_pts_BOR(anl = SLD[SLD$GROUP=='RO7122290 + atezolizumab',], 
+                         title = "RO7122290 + atezolizumab") +
+    annotate("text", x = c(37,39), y = c(-43,-46), label = c("*", "*")) 
+                     
+```
+
+
+# Soluble 4-1-BB
+
+
+Figure 3
+
+```{r , echo = TRUE}
+plot_CHB_FC_ADY(OTHBM %>% filter(LBTEST=="Soluble 4-1BB", ADY <40, VISITDY <40), "")
+
+ # ggsave(filename = "Fig3.pdf", path = "data/stm_2022_figures",
+ #        width = 24, height = 12, unit= "cm", dpi = 300)
+
+
+```
+
+# Cytokines Plot
+
+
+```{r , echo = TRUE, fig.height= 14}
+
+
+cytokines_abbreviations <- c("Interferon Gamma" = "IFN\u03B3", 
+                             "Interleukin 6" = "IL-6", 
+                             "Tumor Necrosis Factor" = "TNF\u03B1", 
+                             "Soluble Interleukin 2 Receptor" = "sCD25")
+
+CYT %>% filter(ADY.1 <40) %>% 
+  mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>% 
+  plot_CHB_FC_ADY("", names_facets = cyt_short)
+
+
+CYT %>% filter(ADY.1 <40) %>% 
+  mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>% 
+  plot_CHB_FC_ADY("", names_facets = cyt_short, scales = "free_y", alpha_points = 0.4) 
+# Fig5
+
+ # ggsave(filename = "Fig5.pdf", path = "data/stm_2022_figures",
+ #        width = 22, height = 20, unit= "cm", dpi = 300, device=cairo_pdf)
+ 
+```
+
+
+
+```{r, echo= TRUE}
+
+CYT %>% filter(ADY.1 <40, 
+               LBTEST == "Interferon Gamma") %>% 
+      mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>%
+  plot_CHB_FC_ADY("D", names_facets = cyt_short)
+
+
+CYT %>% filter(ADY.1 <40, 
+               LBTEST == "Interleukin 6") %>% 
+      mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>%
+  plot_CHB_FC_ADY("D", names_facets = cyt_short)
+
+CYT %>% filter(ADY.1 <40, 
+               LBTEST == "Soluble Interleukin 2 Receptor") %>% 
+      mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>% 
+  plot_CHB_FC_ADY("", names_facets = cyt_short)
+
+
+CYT %>% filter(ADY.1 <40, 
+               LBTEST == "Tumor Necrosis Factor") %>% 
+    mutate(cyt_short = str_replace_all(LBTEST, cytokines_abbreviations)) %>% 
+  plot_CHB_FC_ADY("", names_facets = cyt_short)
+
+                 
+
+```
+
+
+# Biomarkers and responses
+
+## FAP+/panCK-
+
+```{r}
+
+
+
+
+FAP_ker_neg %>% 
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+/panCk- (%)")
+
+ # ggsave(filename = "Fig2C.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 14, unit= "cm", dpi = 300)
+
+
+FAP_ker_neg %>% 
+  filter(GROUP == "RO7122290 single agent") %>% 
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+/panCk- (%)")
+
+FAP_ker_neg %>% 
+  filter(GROUP == "RO7122290 + atezolizumab") %>% 
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+/panCk- (%)")
+
+
+```
+
+
+## FAP+
+
+```{r}
+
+
+
+
+FAP_pos %>%   
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+ (%)")
+
+ # ggsave(filename = "FigS3A.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+
+# figS3
+
+FAP_pos %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 single agent") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+ (%)")
+
+FAP_pos %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 + atezolizumab") %>% 
+  boxplots_clin_paper(y_axis_title_string = "FAP+ (%)")
+
+```
+
+## Total CD8
+
+```{r}
+
+
+
+CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ (count/mm2)")
+# FigS5A
+
+ # ggsave(filename = "FigS5A.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+
+CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 single agent") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ (count/mm2)")
+
+CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 + atezolizumab") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ (count/mm2)")
+
+
+
+```
+
+## Proliferating CD8
+
+```{r}
+
+
+
+
+KI67CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ Ki67+ (count/mm2)")
+
+#FigS5b
+ # ggsave(filename = "FigS5B.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+
+KI67CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 single agent") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ Ki67+ (count/mm2)")
+
+KI67CD8T %>% 
+  filter(VISIT == "Baseline") %>% 
+  filter(GROUP == "RO7122290 + atezolizumab") %>% 
+  boxplots_clin_paper(y_axis_title_string = "CD8+ Ki67+ (count/mm2)")
+      
+
+
+
+                       
+                       
+```
+
+
+
+
+## CD274 Absolute values
+
+
+ICSTOT = Total Perc Immune Cells Stain <- Not used
+POSTUCP = Perc IHC-Positive Tumor Cells <- call "PD-L1 SP263 (% tumor cells)"
+TINFLICP = Perc Tum Infiltr Immune Cell In Tum Mass <- call "PD-L1 SP263 (% Tum infiltr IC in tumor)"
+
+
+### Perc IHC-Positive Tumor Cells
+
+ 
+```{r}
+
+
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    dotplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)")
+
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    dotplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)", facet_variable_cols_as_string = "GROUP")
+
+
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    filter(GROUP == "RO7122290 + atezolizumab") %>% 
+    dotplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)")
+#Figs4btop
+
+ # ggsave(filename = "FigS4B_top.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 10, unit= "cm", dpi = 300)
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    filter(GROUP == "RO7122290 single agent") %>% 
+    dotplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)")
+
+#Figs4bbottom
+ # ggsave(filename = "FigS4B_bottom.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 10, unit= "cm", dpi = 300)
+
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    boxplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)")
+
+
+PDL1_total_perc_ihc_pos_tum_cells %>% 
+    filter(GROUP == "RO7122290 + atezolizumab") %>% 
+    boxplots_clin_paper(y_axis_title_string  = "PD-L1 SP263 (% tumor cells)")
+
+
+
+
+
+
+
+
+
+table_pdl1_tum_cells <- PDL1_total_perc_ihc_pos_tum_cells %>%
+                        select(USUBJID,
+                               GROUP,
+                               VISIT,
+                               ZBTARGET,
+                               ZBTESTCD,
+                               ZBTEST,
+                               EXDOSE,
+                               EXDOSU,
+                               MHTERM,
+                               result = AVAL.x,
+                               PARAMU)
+  
+  
+DT::datatable(data = table_pdl1_tum_cells, 
+              filter = "top", 
+              extensions = 'Buttons', 
+              
+              options = list(pageLength = 10, scrollX = TRUE, 
+                             dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"))
+              
+              )
+```
+
+
+
+### Perc Tum Infiltr Immune Cell In Tum Mass
+
+
+
+```{r}
+
+
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    dotplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)")
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    dotplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)", 
+                        facet_variable_cols_as_string = "GROUP")
+
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    filter(GROUP == "RO7122290 + atezolizumab") %>% 
+    dotplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)")
+#FigS4Atop
+
+# ggsave(filename = "FigS4A_top.pdf", path = "data/stm_2022_figures",
+#        width = 20, height = 10, unit= "cm", dpi = 300)
+
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    filter(GROUP == "RO7122290 single agent") %>% 
+    dotplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)")
+#FigS4Abottom
+# 
+ # ggsave(filename = "FigS4A_bottom.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 10, unit= "cm", dpi = 300)
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    boxplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)")
+
+
+PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+    filter(GROUP == "RO7122290 + atezolizumab") %>% 
+    boxplots_clin_paper(y_axis_title_string = "PD-L1 SP263 (% Tum infiltr IC in tumor)")
+
+table_pdl1_imm_cells_in_tum_mass <- PDL1_total_perc_tum_inf_IC_in_tum_mass %>% 
+                        select(USUBJID, 
+                               GROUP, 
+                               VISIT, 
+                               ZBTARGET, 
+                               ZBTESTCD, 
+                               ZBTEST, 
+                               EXDOSE, 
+                               EXDOSU, 
+                               MHTERM, 
+                               result = AVAL.x, 
+                               PARAMU)
+  
+  
+DT::datatable(data = table_pdl1_imm_cells_in_tum_mass, 
+              filter = "top", 
+              extensions = 'Buttons', 
+              
+              options = list(pageLength = 10, scrollX = TRUE, 
+                             dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"))
+              
+              )
+
+
+```
+
+
+
+# Immunephenotype
+
+```{r}
+
+
+
+
+
+
+mi_p %>% 
+  filter(!is.na(visit_name), 
+         visit_name != "Archival") %>% 
+  ggplot(
+       aes(x = visit_name, 
+           stratum = status, 
+           alluvium = USUBJID, 
+           fill = status, 
+           label = status))+
+  scale_fill_brewer(type = "qual", palette = "Set3") +
+  geom_flow(stat = "alluvium", lode.guidance = "frontback",
+            color = "darkgray") +
+  scale_x_discrete(expand = c(.1, .1)) +
+  geom_stratum(na.rm = TRUE) +
+  geom_text(stat = "stratum", size = 3) +
+  theme_classic()+
+   theme(legend.position = "none") +
+  labs(title = "Immunophenotype", 
+       x = "", 
+       y = "Number of participants")
+
+complete_bsl_ot <- mi_p %>% 
+                  filter(!is.na(visit_name), 
+                          visit_name != "Archival") %>% 
+                  group_by(USUBJID) %>% 
+                  summarise(n = n()) %>% 
+                  filter(n == 2) %>% 
+                  select(USUBJID)
+
+
+mi_p %>% 
+  filter(!is.na(visit_name), 
+         visit_name != "Archival", 
+         USUBJID %in% complete_bsl_ot$USUBJID) %>% 
+  ggplot(
+       aes(x = visit_name, 
+           stratum = status, 
+           alluvium = USUBJID, 
+           fill = GROUP, 
+           label = status))+
+  scale_fill_manual(values = cols_allu[c(6:8,10:11)]) +
+  geom_flow(stat = "alluvium",
+            lode.guidance = "frontback",
+            color = "darkgray", alpha = 1) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  geom_stratum(na.rm = TRUE, 
+               aes(fill = status)) +
+  geom_text(stat = "stratum", size = 3) +
+  theme_classic()+
+   theme(legend.title = element_blank()) +
+  labs(title = "", 
+       x = "", 
+       y = "Number of participants")
+
+#figs7
+
+# ggsave(filename = "FigS7.pdf", path = "data/stm_2022_figures",
+#        width = 20, height = 14, unit= "cm", dpi = 300)
+
+mi_p %>% 
+  filter(!is.na(visit_name), 
+         visit_name != "Archival", 
+         USUBJID %in% complete_bsl_ot$USUBJID) %>% 
+  ggplot(
+       aes(x = visit_name, 
+           stratum = status, 
+           alluvium = USUBJID, 
+           fill = BOR, 
+           label = status))+
+  scale_fill_manual(values = cols_allu) +
+  geom_flow(stat = "alluvium",
+            lode.guidance = "frontback",
+            color = "darkgray", alpha = 1) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  geom_stratum(na.rm = TRUE, 
+               aes(fill = status)) +
+  geom_text(stat = "stratum", size = 3) +
+  theme_classic()+
+   theme(legend.title = element_blank()) +
+  labs(title = "Immunophenotype", 
+       x = "", 
+       y = "Number of participants")
+
+
+mi_p %>% 
+  filter(!is.na(visit_name), 
+         visit_name != "Archival") %>% 
+  ggplot(
+       aes(x = visit_name, 
+           stratum = status, 
+           alluvium = USUBJID, 
+           fill = GROUP, 
+           label = status))+
+  scale_fill_manual(values = cols_allu) +
+  geom_flow(stat = "alluvium",
+            lode.guidance = "frontback",
+            color = "darkgray", alpha = 1) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  geom_stratum(na.rm = TRUE, 
+               aes(fill = status)) +
+  geom_text(stat = "stratum", size = 3) +
+  theme_classic()+
+   theme(legend.title = element_blank()) +
+  labs(title = "Immunophenotype", 
+       x = "", 
+       y = "Number of participants")
+
+
+mi_p %>% 
+  filter(!is.na(visit_name), 
+         visit_name != "Archival") %>% 
+  ggplot(
+       aes(x = visit_name, 
+           stratum = status, 
+           alluvium = USUBJID, 
+           fill = BOR, 
+           label = status))+
+  scale_fill_manual(values = cols_allu) +
+  geom_flow(stat = "alluvium",
+            lode.guidance = "frontback",
+            color = "darkgray", alpha = 1) +
+  scale_x_discrete(expand = c(.1, .1)) +
+  geom_stratum(na.rm = TRUE, 
+               aes(fill = status)) +
+  geom_text(stat = "stratum", size = 3) +
+  theme_classic()+
+   theme(legend.title = element_blank()) +
+  labs(title = "Immunophenotype", 
+       x = "", 
+       y = "Number of participants")
+
+
+```
+
+
+
+
+```{r old.functions, echo = TRUE}
+plot_CHB_med <- function(dat, title){
+    dat$ADY[dat$VISIT=='Baseline'] = 0
+    toplot <- dat %>% filter(ADY>=0)  %>%
+              mutate(LBTEST = factor(case_when(LBTEST=="Soluble Interleukin 2 Receptor" ~"1",
+                                                LBTEST=="Tumor Necrosis Factor" ~"2",
+                                                LBTEST=="Interferon Gamma" ~"3",
+                                                LBTEST=="Interleukin 6" ~"4"),
+                                     levels = c("1", "2", "3", "4"),
+                                     labels = c("Soluble CD25",
+                                                "Tumor Necrosis Factor",
+                                                "Interferon Gamma",
+                                                "Interleukin 6"))) %>%
+              filter(is.na(RCHG)==FALSE) %>% group_by(LBTEST, GROUP, EXDOSE, ADY) %>%
+              summarize(n1=n(),
+                        med1=median(RCHG, na.rm=TRUE),
+                        iqrl=quantile(RCHG, probs=0.25,na.rm=TRUE),
+                        iqrh=quantile(RCHG, probs=0.75,na.rm=TRUE)) %>%
+              ungroup() %>%
+              mutate(GROUP2 = factor(case_when(GROUP=="RO7122290 single agent" ~"1",
+                                               GROUP=="RO7122290 + atezolizumab" & EXDOSE<500   ~"2",
+                                               GROUP=="RO7122290 + atezolizumab" & EXDOSE>=500  ~"3"),
+                                     levels = c("1", "2", "3"),
+                                     labels = c("RO7122290 single agent",
+                                                "RO7122290 + atezolizumab \n(45-260 mg)",
+                                                "RO7122290 + atezolizumab \n(500-2000 mg)")))
+    gg <- ggplot(toplot, aes(x=as.numeric(ADY), y=med1, group=as.factor(EXDOSE), colour=as.factor(EXDOSE))) +
+          geom_line(size=1, alpha=0.8, position = position_dodge(width = 0.3)) +
+          geom_errorbar(aes(ymin=iqrl, ymax=iqrh), width=.1 , position = position_dodge(width = 0.3)) +
+          geom_point(size=1.5, alpha=0.9, position = position_dodge(width = 0.3)) +
+          theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+          geom_hline(aes(yintercept = 1), linetype="dashed" , color = "black") +
+          geom_hline(aes(yintercept = 10), linetype="dotted" , color = "black") +
+          geom_hline(aes(yintercept = 0.1), linetype="dotted" , color = "black") +
+          #geom_text(aes(label=n1), size = 3 ,vjust=0.5, hjust = 0.5, color= "black", position = position_dodge(width = 0.3)) +
+          scale_x_continuous(labels = c(1,8, 15, 22, 29, 36, 43), breaks = c(1,8, 15, 22, 29, 36, 43)) +
+          scale_y_log10() +
+          xlab("Days after first dose") +
+          ylab("Fold change from baseline") +
+          scale_colour_manual(name="RO7122290 dose (mg)", values = dosecols) +
+          ggtitle(title) +
+          theme_bw() +
+          facet_grid(rows = vars(LBTEST), cols = vars(GROUP2)) +
+          labs(caption = paste("Plotted are median fold changes over time,", "\n",
+                               "vertical lines denote interquartile ranges.", "\n",
+                               "Data from", snapshot.date))
+    print(gg)
+}
+```
+
+## Other relations
+
+```{r}
+
+
+wide_others <- FAP_ker_neg %>% 
+                bind_rows(KI67CD8T) %>% 
+                bind_rows(CD8T) %>% 
+                select(USUBJID, 
+                       ARMCD, 
+                       VISIT, 
+                       ZBTARGET,
+                       ZBORRES, 
+                       EXDOSE, 
+                       AVALC, 
+                       MHTERM, 
+                       BASE, 
+                       AVAL, 
+                       CHG) %>% 
+                pivot_wider(names_from = c(VISIT, 
+                       ZBTARGET),
+                            values_from = c(
+                       ZBORRES,BASE, 
+                       AVAL, 
+                       CHG)
+                            )
+
+
+
+scatterplot_wide <- function( data,
+                             x_variables, 
+                             y_variables,
+                             palette_fill = respcolours[1:4], 
+                             spearman_corr = FALSE,
+                             position_spearman_legend_y = "top",
+                             position_spearman_legend_x = "left",
+                             shape = NULL,
+                             fill = NULL,
+                             y_label = "ADD LABEL", 
+                             x_label = "ADD LABEL",
+                             shape_title_string = "",
+                             alpha = 1) {
+  
+  
+  
+  g <- ggplot(data = data, aes(x = {{x_variables}}, 
+                               y = {{y_variables}} )) +
+    
+    geom_point(aes(
+      #shape = {{shape}},
+      fill = {{fill}}
+    ),
+    size = 2,
+    shape = 21,
+    alpha = alpha) +
+    
+    scale_fill_manual(values = palette_fill, 
+                      name = "", drop = TRUE) +
+    # scale_shape_manual(values=c(21, 24, 22, 23,4), 
+    #                    name = "") +
+    theme(legend.position = "right") +
+    labs(y = y_label, 
+         x = x_label
+           ) +
+    theme_bw()
+  
+  
+  if (spearman_corr == TRUE) {
+    g <- g  + stat_cor(method="spearman", 
+                       label.x.npc = position_spearman_legend_x, 
+                       label.y.npc = position_spearman_legend_y,
+                       aes(label = paste(sub("R = ","Spearman=",..r.label..),
+                                         "\n",..p.label..)),
+                       output.type="text"
+    )
+    
+  }
+  
+g
+
+  
+}
+
+
+
+ggplot(wide_others, 
+       aes(x = `CHG_On Treatment_MKI67+ CD8A+`, 
+           y = `BASE_Baseline_FAP+/KRT-`)) +
+  geom_point(aes(fill = AVALC), shape = 21, size = 2) +
+  scale_fill_manual(name="Response by RECIST 1.1", values = respcolours, breaks = order_bor) +
+  theme_bw()
+
+
+
+scatterplot_wide(wide_others, 
+                 x_variables =  `CHG_On Treatment_MKI67+ CD8A+`, 
+                 y_variables = `BASE_Baseline_FAP+/KRT-`, 
+                 fill = AVALC, 
+                 y_label = "Baseline FAP+/panCK-", 
+                 x_label = "Ki67+CD8+ Change from baseline", 
+                 spearman_corr = TRUE)
+
+
+scatterplot_wide(wide_others, 
+                 x_variables =  `CHG_On Treatment_(MKI67+ CD8A+)+(MKI67- CD8A+)`, 
+                 y_variables = `BASE_Baseline_FAP+/KRT-`, 
+                 fill = AVALC, 
+                 y_label = "Baseline FAP+/panCK-", 
+                 x_label = "Total CD8+ Change from baseline", 
+                 spearman_corr = TRUE)
+# Figs3c
+
+ # ggsave(filename = "FigS3C.pdf", path = "data/stm_2022_figures",
+ #        width = 16, height = 12, unit= "cm", dpi = 300)
+
+
+scatterplot_wide(wide_others, 
+                 x_variables =  `CHG_On Treatment_MKI67+ CD8A+`, 
+                 y_variables = `BASE_Baseline_(MKI67+ CD8A+)+(MKI67- CD8A+)`, 
+                 fill = AVALC, 
+                 y_label = "Baseline Total CD8+", 
+                 x_label = "Ki67+CD8+ Change from baseline", 
+                 spearman_corr = TRUE)
+
+scatterplot_wide(wide_others, 
+                 x_variables =  `CHG_On Treatment_(MKI67+ CD8A+)+(MKI67- CD8A+)`, 
+                 y_variables = `BASE_Baseline_(MKI67+ CD8A+)+(MKI67- CD8A+)`, 
+                 fill = AVALC, 
+                 y_label = "Baseline Total CD8+", 
+                 x_label = "Total CD8+ Change from baseline", 
+                 spearman_corr = TRUE)
+
+# FigS5C
+ # ggsave(filename = "FigS5C.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+```
+
+
+## FAP at baseline by indication
+
+Figure 2B
+
+```{r}
+
+FAP_ker_neg %>% 
+  filter(VISIT == "Baseline", 
+         AVALC != "") %>% 
+  ggplot(aes(y = reorder(indication, AVAL), 
+               x = AVAL)) +
+    geom_boxplot(outlier.shape = NA, 
+                 alpha = 0.8, 
+                 fill = "#d9d9d9"
+    ) +
+    geom_jitter(alpha = 0.8, 
+                     size = 2,
+                shape = 21,
+                height = 0.2,
+                     aes(
+                         fill = AVALC)
+    ) +
+    labs(#x = paste(as_label(enquo(x_variable)))
+      x = paste("FAP+/panCk- (%)"), 
+      y = ""
+      
+    ) +
+    scale_fill_manual(values = respcolours, 
+                      name = "") + theme_bw()
+
+
+
+ # ggsave(filename = "Fig2B.pdf", path = "data/stm_2022_figures",
+ #        width = 20, height = 12, unit= "cm", dpi = 300)
+
+
+
+
+```
+
+
+
+
+
+# TTE analysis
+
+
+```{r}
+
+
+
+il8_bsl <- OTHBM %>% 
+              filter(PARAMCD == "INTLP8SI", 
+                     AVISIT == "BASELINE") %>% 
+  select(USUBJID, 
+         il8_bsl = AVAL)
+
+fap_krt_bsl <- FAP_ker_neg %>% 
+                filter(VISIT == "Baseline") %>% 
+  select(USUBJID, 
+         fap_krt = ZBORRES)
+
+total_cd8_bsl <- CD8T %>% 
+                filter(VISIT == "Baseline") %>% 
+  select(USUBJID, 
+         cd8 = ZBORRES)
+
+cpi_status_all <- adsl %>%
+              select(USUBJID,
+                     CPIFL) %>% 
+              distinct() %>% 
+              mutate(`CPI Experience` = case_when(CPIFL == "Y" ~ "Yes", 
+                               CPIFL == "N" ~ "No",
+                               TRUE ~ "Unknown (PROB ERROR)")) %>% 
+              select(-CPIFL)
+
+
+neut_lymph_bsl <- OTHBM %>% 
+              filter(PARAMCD %in% c("NEUTRSI", "LYMPHSI"), 
+                     AVISIT == "BASELINE", 
+                     LBTPT == "PREDOSE") %>%
+  select(USUBJID, 
+         PARAMCD,
+         AVAL) %>% 
+  pivot_wider(id_cols = USUBJID, 
+              names_from = PARAMCD, 
+              values_from = AVAL) %>% 
+  mutate(neut_over_lym = NEUTRSI/LYMPHSI) %>% 
+  select(USUBJID, 
+         neut_over_lym)
+
+# read external data in separate script
+
+data_cox <- entimice_tte %>% 
+    left_join(il8_bsl, 
+              by = "USUBJID") %>% 
+  left_join(total_cd8_bsl, 
+              by = "USUBJID") %>% 
+  left_join(fap_krt_bsl, 
+              by = "USUBJID")  %>% 
+  left_join(cpi_status_all, 
+              by = "USUBJID")%>% 
+  left_join(external_info_clin_sci, 
+              by = "USUBJID")  %>% 
+  left_join(neut_lymph_bsl, 
+              by = "USUBJID")  %>% 
+  mutate(`IL8 level`  = case_when(il8_bsl >= 20 ~ "High", 
+                                                                             il8_bsl < 20 ~ "Low", 
+                                                                             is.na(il8_bsl) ~ "Unknown"),
+         `CD8 over 350 bsl` = case_when(cd8 > 350 ~ "Yes", 
+                                                   cd8 <=  350 ~ "No", 
+                                                   TRUE ~ "Unknown"),
+         `FAP+/panCk- level` = case_when(fap_krt >= 20 ~ "High", 
+                                                                             fap_krt < 20 ~ "Low", 
+                                                                             is.na(fap_krt) ~ "Unknown"),
+         `Neutrophils/lymphocytes` = case_when(neut_over_lym >= 4 ~ "High", 
+                                                                             neut_over_lym < 4 ~ "Low", 
+                                                                             is.na(neut_over_lym) ~ "Unknown")
+         ) %>% 
+        mutate(`IL8 level` = fct_relevel(`IL8 level`, c("Low", "High", "Unknown")),
+                         `FAP+/panCk- level` = fct_relevel( `FAP+/panCk- level`, c("Low", "High", "Unknown")), 
+                         `Neutrophils/lymphocytes` = fct_relevel( `Neutrophils/lymphocytes`, c("Low", "High", "Unknown")))
+
+
+res.cox.entimice <- coxph(Surv(AVAL, censor_reverse) ~ `IL8 level` +
+                            `FAP+/panCk- level` +
+                            `Liver metastasis` +
+                               `CD8 over 350 bsl` +
+                            `CPI Experience` +
+                             `LOT <=4` +
+                            `Neutrophils/lymphocytes`, 
+                          data = data_cox
+                )
+
+summary(res.cox.entimice)
+ggforest(res.cox.entimice, 
+         fontsize = 1)
+
+# ggsave(here::here("data/stm_2022_figures/Fig8.pdf"),
+#        width = 30, height = 20, unit= "cm", dpi = 300)
+```
+
+

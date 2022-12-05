@@ -1,0 +1,334 @@
+---
+title: "BP40087 plots for MS"
+author: 'Iakov Davydov'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    mathjax: default
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+---
+
+Some parts of the code were written by Nicolas Staedler and Eveline Nüesch.
+
+```{r}
+library(tidyverse)
+```
+
+```{r cache=TRUE}
+source(
+  here::here("R/fig4_internal.R")
+)
+```
+
+```{r}
+source(
+  here::here("R/heatmap_ms.R")
+)
+source(
+  here::here("R/lme_fct_ms.R")
+)
+source(
+  here::here("R/misc.R")
+)
+```
+
+```{r}
+dosecols <- c(
+  "45", "90", "130", "260", "500", "670", "1000", "2000"
+) %>%
+  set_names(viridis::viridis(length(.), direction = -1), .)
+```
+
+
+```{r}
+params_of_interest1 <- tribble(
+  ~LBTSTDTL, ~LBTEST,
+  "CD3+CD4+Ki67+ ABS", "CD4+ Ki67+ T cells",
+  "CD3+CD8+Ki67+ ABS", "CD8+ Ki67+ T cells",
+  "CD3+CD4+CD137+ ABS", "CD4+ 4-1BB+ T cells",
+  "CD3+CD8+CD137+ ABS", "CD8+ 4-1BB+ T cells",
+)
+```
+
+
+Read data
+
+```{r}
+pat_groups <- sdtm$dm %>%
+  distinct(USUBJID, ARM, ARMCD) %>%
+  mutate(GROUP = case_when(
+    ARMCD == "PARTAQW" ~ 1,
+    ARMCD == "PARTBQ3W" ~ 2,
+    TRUE ~ NA_real_
+  )) %>%
+  mutate(GROUP = factor(GROUP, levels = c("1", "2"), labels = c("RO7122290 single agent", "RO7122290 + atezolizumab"))) %>%
+  select(USUBJID, GROUP, ARMCD)
+
+pat_groups %>%
+  group_by(USUBJID) %>%
+  filter(n() > 1) %>%
+  {
+    stopifnot(nrow(.) == 0)
+  }
+
+lbinfo <- adam$adlb %>%
+  distinct(LBREFID, VISIT, VISITNUM, VISITDY, LBTPT, DMDY) %>%
+  group_by(LBREFID) %>%
+  # remove a few strange duplicates
+  filter(row_number() == 1) %>%
+  mutate(VISIT2 = gsub(" ", "", gsub("Day ", "_D", gsub("Cycle ", "C", VISIT)))) %>%
+  mutate(VISIT2 = if_else(VISIT2 == "28_DFollowUp", "F_UP", VISIT2)) %>%
+  ungroup()
+
+lbinfo %>%
+  group_by(LBREFID) %>%
+  filter(n() > 1) %>%
+  {
+    stopifnot(nrow(.) == 0)
+  }
+
+flow_data_pp <- flow_data %>%
+  left_join(
+    lbinfo,
+    by = c("ACCSNM" = "LBREFID")
+  ) %>%
+  left_join(pat_groups, by = "USUBJID")
+
+flow_data_tumor_pp <- flow_data_tumor %>%
+  left_join(pat_groups, by = "USUBJID")
+```
+
+
+```{r}
+exdata <- adam$adex %>%
+  filter(EXTRT == "RO7122290" & VISITDY == 1) %>%
+  distinct(USUBJID, EXDOSE, EXDOSU)
+```
+
+
+```{r}
+bm1 <- flow_data_pp %>%
+  filter(LABORESU == "cells/uL") %>%
+  left_join(exdata, by = "USUBJID") %>%
+  filter((GROUP == "RO7122290 single agent" & (EXDOSE == 45 | EXDOSE == 500)) | GROUP == "RO7122290 + atezolizumab") %>%
+  select(
+    STUDYID, USUBJID, GROUP, ARMCD, EXDOSE, EXDOSU, VISIT2, VISITNUM, LBTPT,
+    LBTSTDTL, LBMTDTL, LABRESN, LABORESU, VISITDY
+  )
+
+bm_bl <- bm1 %>%
+  filter(VISIT2 == "C1_D1", !is.na(LABRESN)) %>%
+  select(USUBJID, LBTSTDTL, BASE = LABRESN)
+
+bm2 <- bm1 %>%
+  left_join(bm_bl, by = c("USUBJID", "LBTSTDTL")) %>%
+  filter(!is.na(LABRESN), !is.na(BASE), !is.na(VISITNUM)) %>%
+  mutate(
+    cfb = log2(1 + LABRESN) - log2(1 + BASE)
+  ) %>%
+  filter(VISITDY < 40)
+```
+
+```{r}
+bm1_tumor <- flow_data_tumor_pp %>%
+  filter(!is.na(LABRESN)) %>%
+  filter(LABORESU == "%") %>%
+  left_join(exdata, by = "USUBJID") %>%
+  filter((GROUP == "RO7122290 single agent" & (EXDOSE == 45 | EXDOSE == 500)) | GROUP == "RO7122290 + atezolizumab") %>%
+  select(
+    STUDYID, USUBJID, GROUP, ARMCD, EXDOSE, EXDOSU,
+    LBREFID, LBTSTDTL, LBMTDTL, LABRESN, LABORESU
+  )
+
+bm_tumor_bl <- bm1_tumor %>%
+  filter(LBREFID == 851, !is.na(LABRESN)) %>%
+  select(USUBJID, LBTSTDTL, BASE = LABRESN)
+
+# C4D2; C2D8
+bm2_tumor <- bm1_tumor %>%
+  left_join(bm_tumor_bl, by = c("USUBJID", "LBTSTDTL")) %>%
+  filter(LBREFID == 852) %>%
+  filter(!is.na(LABRESN), !is.na(BASE)) %>%
+  mutate(
+    cfb = logit_mod(LABRESN / 100) - logit_mod(BASE / 100)
+  )
+```
+
+```{r}
+plot_CHB_logFC <- function(dat, title) {
+  toplot <- dat %>%
+    filter(VISITDY >= 0 & VISITDY <= 43) %>%
+    mutate(GROUP2 = factor(case_when(
+      GROUP == "RO7122290 single agent" ~ "1",
+      GROUP == "RO7122290 + atezolizumab" & EXDOSE < 500 ~ "2",
+      GROUP == "RO7122290 + atezolizumab" & EXDOSE >= 500 ~ "3"
+    ),
+    levels = c("1", "2", "3"),
+    labels = c(
+      "RO7122290 single agent",
+      "RO7122290 + atezolizumab\n(45-260 mg)",
+      "RO7122290 + atezolizumab\n(500-2000 mg)"
+    )
+    )) %>%
+    mutate(LBTEST = fct_inorder(factor(LBTEST)))
+
+  ggplot(toplot, aes(x = as.numeric(VISITDY), y = cfb, group = USUBJID, colour = as.factor(EXDOSE))) +
+    geom_boxplot(aes(x = as.numeric(VISITDY), group = VISITDY), colour = "gray14", fill = "#f0f0f0", outlier.shape = NA, size = 0.4, width = 5, alpha = 0.5) +
+    geom_point(aes(fill = as.factor(EXDOSE), group = USUBJID), size = 1, alpha = 0.9, shape = 21, position = position_dodge(width = 0.3), color = "gray14") +
+    geom_line(size = 0.6, alpha = 0.6, position = position_dodge(width = 0.3)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    geom_hline(aes(yintercept = 0), linetype = "dashed", color = "black") +
+    geom_hline(aes(yintercept = 1), linetype = "dotted", color = "black") +
+    geom_hline(aes(yintercept = -1), linetype = "dotted", color = "black") +
+    scale_x_continuous(labels = c(1, 8, 15, 22, 29, 36, 43), breaks = c(1, 8, 15, 22, 29, 36, 43)) +
+    # scale_y_log10() +
+    scale_y_continuous(labels = c(-4, -2, 0, 2, 4), breaks = c(-4, -2, 0, 2, 4)) +
+    xlab("Planned day\n(starting from the first dose)") +
+    ylab(paste0("Log2 fold change", "\n", "(pseudocount corrected)")) +
+    scale_colour_manual(name = "RO7122290 dose (mg)", values = dosecols) +
+    scale_fill_manual(name = "RO7122290 dose (mg)", values = dosecols) +
+    ggtitle(title) +
+    theme_bw() +
+    facet_grid(rows = vars(LBTEST), cols = vars(GROUP2), scales = "free_y") +
+    labs(caption = paste(
+      "Data are grouped by planned visit days for box plots."
+    ))
+}
+```
+
+```{r, fig.width=8, fig.height=5}
+params_of_interest1 %>%
+  left_join(bm2) %>%
+  filter(str_starts(LBTEST, "CD4+")) %>%
+  plot_CHB_logFC(NULL)
+# ggsave("ms_plots/fig4a.pdf")
+
+params_of_interest1 %>%
+  left_join(bm2) %>%
+  filter(str_starts(LBTEST, "CD8+")) %>%
+  plot_CHB_logFC(NULL)
+# ggsave("ms_plots/fig4b.pdf")
+```
+
+```{r}
+params_of_interest2 <- tribble(
+  ~LBTSTDTL, ~CATEGORY, ~NAME,
+  "CD3+CD8+Ki67+ ABS", "CD8+", "Ki67+",
+  "CD3+CD8+CD137+ ABS", "CD8+", "CD137+",
+  "CD3+CD8+CD134+ ABS", "CD8+", "CD134+",
+  "CD3+CD8+CD152+ ABS", "CD8+", "CD152+",
+  "CD3+CD8+CD278+ ABS", "CD8+", "CD278+",
+  "CD3+CD8+Tim3+ ABS", "CD8+", "Tim3+",
+  "CD3+CD8+HLA-DR+ ABS", "CD8+", "HLA-DR+",
+  "CD3+CD4+Ki67+ ABS", "CD4+", "Ki67+",
+  "CD3+CD4+CD137+ ABS", "CD4+", "CD137+",
+  "CD3+CD4+CD134+ ABS", "CD4+", "CD134+",
+  "CD3+CD4+CD152+ ABS", "CD4+", "CD152+",
+  "CD3+CD4+CD278+ ABS", "CD4+", "CD278+",
+  "CD3+CD4+Tim3+ ABS", "CD4+", "Tim3+",
+  "CD3+CD4+HLA-DR+ ABS", "CD4+", "HLA-DR+",
+  "CD3+CD4+CD25+CD127-/loFoxP3+ ABS", "CD4+", "FoxP3+ Treg",
+  "CD4+CD45RA-CD197+ ABS", "Memory", "CM CD4+",
+  "CD8+CD45RA-CD197+ ABS", "Memory", "CM CD8+",
+  "CD4+CD45RA-CD197- ABS", "Memory", "EM CD4+",
+  "CD8+CD45RA-CD197- ABS", "Memory", "EM CD8+",
+  "CD8+CD45RA+CD197- ABS", "Memory", "TEMRA CD8+",
+  "CD4+CD45RA+CD197+ ABS", "Memory", "Naive CD4+",
+  "CD8+CD45RA+CD197+ ABS", "Memory", "Naive CD8+",
+  "CD3-CD16/CD56+CD137+ ABS", "NK", "CD137+",
+  "CD3-CD16/CD56+CD134+ ABS", "NK", "CD134+",
+  "CD3-CD16/CD56+CD152+ ABS", "NK", "CD152+",
+  "CD3-CD16/CD56+CD278+ ABS", "NK", "CD278+",
+  "CD3-CD16/CD56+Tim3+ ABS", "NK", "Tim3+",
+) %>%
+  mutate(LBTSTDTL = fct_inorder(factor(LBTSTDTL))) %>%
+  mutate(CATEGORY = fct_inorder(factor(CATEGORY)))
+```
+
+
+```{r}
+mydfA <- bm2 %>%
+  filter(GROUP == "RO7122290 single agent") %>%
+  mutate(VISITDY = factor(VISITDY))
+
+mydfB <- bm2 %>%
+  filter(GROUP == "RO7122290 + atezolizumab") %>%
+  mutate(VISITDY = factor(VISITDY))
+
+
+signif_thr <- 0.01
+
+
+res.contr.lme.adj.partA <- mydfA %>%
+  filter(VISITDY != 1) %>%
+  mutate(VISITDY = droplevels(VISITDY)) %>%
+  lme_fct_ms() %>%
+  mutate(TOPFLAG = pval.adj < signif_thr) %>%
+  mutate(VISITDY = factor(VISITDY))
+res.contr.lme.adj.partB <- mydfB %>%
+  filter(VISITDY != 1) %>%
+  mutate(VISITDY = droplevels(VISITDY)) %>%
+  lme_fct_ms() %>%
+  mutate(TOPFLAG = pval.adj < signif_thr) %>%
+  mutate(VISITDY = factor(VISITDY))
+```
+
+```{r fig.width=7, fig.height=5}
+data_a <- left_join(
+  select(params_of_interest2, LBTSTDTL, CATEGORY, NAME),
+  mydfA
+) %>%
+  mutate(LBTSTDTL = factor(LBTSTDTL, levels = levels(params_of_interest2$LBTSTDTL)))
+part_a <- pd_heatmap_plot(
+  data_a,
+  res.contr.lme.adj.partA,
+  unit = "ABS",
+  timepoint = VISITDY,
+  baseline_timepoint = "1",
+  cfb = cfb,
+  test = LBTSTDTL,
+  result = LABRESN,
+  column_title = mydfA$GROUP[1],
+  row_split_var = CATEGORY,
+  row_label = NAME,
+  column_prefix = "day "
+)
+data_b <- left_join(
+  select(params_of_interest2, LBTSTDTL, CATEGORY, NAME),
+  mydfB
+) %>%
+  mutate(LBTSTDTL = factor(LBTSTDTL, levels = levels(params_of_interest2$LBTSTDTL)))
+part_b <- pd_heatmap_plot(
+  data_b,
+  res.contr.lme.adj.partB,
+  unit = "ABS",
+  timepoint = VISITDY,
+  baseline_timepoint = "1",
+  cfb = cfb,
+  test = LBTSTDTL,
+  result = LABRESN,
+  column_title = mydfB$GROUP[1],
+  row_split_var = CATEGORY,
+  row_label = NAME,
+  column_prefix = "day "
+)
+
+hm <- ComplexHeatmap::draw(part_a + part_b,
+  annotation_legend_side = "bottom", heatmap_legend_side = "bottom",
+  merge_legend = TRUE,
+  ht_gap = unit(1, "cm"),
+  legend_gap = unit(1, "cm"),
+  padding = unit(c(2, 2, 2, 2), "mm")
+)
+
+# grDevices::cairo_pdf("ms_plots/fig4c.pdf", width = 7, height = 5.5)
+# ComplexHeatmap::draw(hm)
+# dev.off()
+```
